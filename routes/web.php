@@ -1,15 +1,18 @@
 <?php
 
 use App\Http\Controllers\AvailabilityController;
+use App\Http\Controllers\LandingPageController;
 use App\Http\Controllers\ScheduleController;
 use App\Http\Controllers\SubjectController;
 use App\Http\Controllers\TeacherController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
-Route::get('/', function () {
-    return Inertia::render('welcome');
-})->name('home');
+// Route::get('/', function () {
+//     return Inertia::render('welcome');
+// })->name('home');
+
+Route::resource("/", LandingPageController::class)->only("index");
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', function () {

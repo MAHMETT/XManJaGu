@@ -9,10 +9,6 @@ import type { PageProps as InertiaPageProps } from '@inertiajs/core';
 import { Head, router, usePage } from '@inertiajs/react';
 import { useEffect, useState } from 'react';
 
-// --- DATA STRUKTUR YANG DIPERBAIKI ---
-
-// 1. Representasi setiap kolom di tabel jadwal.
-// Menggabungkan slot, nama, dan waktu istirahat dalam satu struktur data.
 const tableColumns = [
     { type: 'slot', value: 1, time: '07:00 - 07:45' },
     { type: 'slot', value: 2, time: '07:45 - 08:30' },
@@ -25,9 +21,8 @@ const tableColumns = [
     { type: 'slot', value: 7, time: '12:30 - 13:15' },
     { type: 'slot', value: 8, time: '13:15 - 14:00' },
     { type: 'slot', value: 9, time: '14:00 - 15:15' },
-] as const; // `as const` untuk type-safety yang lebih kuat
+] as const;
 
-// 2. Data hari yang lebih eksplisit dengan `id` dan `name`.
 const days = [
     { id: '1', name: 'Senin' },
     { id: '2', name: 'Selasa' },
@@ -35,8 +30,6 @@ const days = [
     { id: '4', name: 'Kamis' },
     { id: '5', name: 'Jumat' },
 ];
-
-// --- Tipe Data (Interfaces) ---
 
 interface ScheduleItem {
     slot: number;
@@ -123,7 +116,7 @@ export default function ScheduleIndex() {
 
                                 const item = findItem(daySchedule, col.value);
                                 return (
-                                    <TableCell key={index} className="align-top">
+                                    <TableCell key={index} className="text-center align-top">
                                         {item ? (
                                             <div>
                                                 <div className="font-semibold">{item.subject.name}</div>
