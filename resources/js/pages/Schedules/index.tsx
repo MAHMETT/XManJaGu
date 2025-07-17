@@ -84,13 +84,13 @@ export const ScheduleTable = ({ viewOnly = false }: { viewOnly?: boolean }) => {
 
     const handleGenerate = () => {
         if (viewOnly == false) {
-            return null;
-        } else {
             if (confirm('Apakah Anda yakin ingin generate ulang jadwal? Proses ini akan menimpa jadwal yang ada.')) {
-                router.get(route('schedules.index'), undefined, {
+                router.post(route('schedules.generate'), undefined, {
                     preserveScroll: true,
                 });
             }
+        } else {
+            return null;
         }
     };
     // Helper untuk mencari jadwal berdasarkan slot
@@ -231,25 +231,26 @@ export const ScheduleTable = ({ viewOnly = false }: { viewOnly?: boolean }) => {
                 </div>
 
                 <div className="flex flex-wrap gap-2 max-sm:justify-between">
-                    <div className="flex items-center gap-1 rounded-md border p-1">
-                        <Button
-                            variant={tableView === 'horizontal' ? 'default' : 'ghost'}
-                            size="icon"
-                            onClick={() => saveTableViewPreference('horizontal')}
-                            title="Tampilan Horizontal"
-                        >
-                            <ListBulletIcon className="h-4 w-4" />
-                        </Button>
-                        <Button
-                            variant={tableView === 'vertical' ? 'default' : 'ghost'}
-                            size="icon"
-                            onClick={() => saveTableViewPreference('vertical')}
-                            title="Tampilan Vertikal"
-                        >
-                            <ViewColumnsIcon className="h-4 w-4" />
-                        </Button>
-                    </div>
-
+                    {!activeClass || !schedules[activeClass] || Object.keys(schedules[activeClass]).length === 0 ? null : (
+                        <div className="flex items-center gap-1 rounded-md border p-1">
+                            <Button
+                                variant={tableView === 'horizontal' ? 'default' : 'ghost'}
+                                size="icon"
+                                onClick={() => saveTableViewPreference('horizontal')}
+                                title="Tampilan Horizontal"
+                            >
+                                <ListBulletIcon className="h-4 w-4" />
+                            </Button>
+                            <Button
+                                variant={tableView === 'vertical' ? 'default' : 'ghost'}
+                                size="icon"
+                                onClick={() => saveTableViewPreference('vertical')}
+                                title="Tampilan Vertikal"
+                            >
+                                <ViewColumnsIcon className="h-4 w-4" />
+                            </Button>
+                        </div>
+                    )}
                     {viewOnly ? null : (
                         <Button variant="outline" onClick={handleGenerate}>
                             <ArrowPathIcon className="mr-2 h-4 w-4" /> Generate Ulang
@@ -262,7 +263,7 @@ export const ScheduleTable = ({ viewOnly = false }: { viewOnly?: boolean }) => {
             {!activeClass || !schedules[activeClass] || Object.keys(schedules[activeClass]).length === 0 ? (
                 <EmptyState
                     title="Jadwal Belum Tersedia"
-                    description="Silakan pilih kelas atau generate jadwal jika belum ada."
+                    description={viewOnly ? null : 'Silakan pilih kelas atau generate jadwal jika belum ada.'}
                     action={
                         viewOnly ? null : (
                             <Button onClick={handleGenerate}>

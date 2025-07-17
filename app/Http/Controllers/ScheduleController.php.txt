@@ -1,0 +1,762 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Availability as AvailabilityModel;
+use App\Models\Schedule as ScheduleModel;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
+use Inertia\Inertia;
+use Exception;
+
+class ScheduleController extends Controller
+{
+    // Configuration constants
+    private const CLASSES = ['10', '11', '12'];
+    private const DAYS = [1, 2, 3, 4, 5]; // Monday to Friday
+    private const TOTAL_SLOTS = 9;
+    private const BREAK_SLOTS = [4, 7]; // Break after slots 3 and 6
+    private const MAX_DAILY_SUBJECT_HOURS = 3;
+    private const MAX_CONSECUTIVE_SLOTS = 3;
+    private const MIN_BREAK_BETWEEN_SAME_SUBJECT = 1; // Days
+
+    // Scoring weights for slot assignment
+    private const SCORE_CONSECUTIVE = 50;
+    private const SCORE_MORNING_PREFERENCE = 20;
+    private const SCORE_TEACHER_WORKLOAD_BALANCE = 15;
+    private const SCORE_DAILY_DISTRIBUTION = 10;
+
+    /**
+     * Display schedules grouped by class, day, and slot
+     */
+    public function index()
+    {
+        try {
+            $schedules = Cache::remember('schedules_index', 300, function () {
+                return ScheduleModel::with(['subject', 'teacher'])
+                    ->orderBy('class')
+                    ->orderBy('day')
+                    ->orderBy('slot')
+                    ->get()
+                    ->groupBy('class')
+                    ->map(function ($byClass) {
+                        return $byClass->groupBy('day')
+                            ->map(function ($byDay) {
+                                return $byDay->sortBy('slot');
+                            });
+                    });
+            });
+
+            $statistics = $this->calculateScheduleStatistics($schedules);
+
+            return Inertia::render('Schedules/index', [
+                'schedules' => $schedules,
+                'statistics' => $statistics,
+                'classes' => self::CLASSES,
+                'days' => self::DAYS,
+            ]);
+        } catch (Exception $e) {
+            Log::error('Error fetching schedules: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return redirect()->back()->with('error', 'Failed to load schedules. Please try again.');
+        }
+    }
+
+    /**
+     * Generate optimized schedule with consecutive slot allocation
+     */
+    public function generate()
+    {
+        try {
+            DB::beginTransaction();
+
+            // Clear cache
+            Cache::forget('schedules_index');
+
+            // Clear existing schedules
+            ScheduleModel::truncate();
+
+            $result = $this->generateOptimizedSchedule();
+
+            DB::commit();
+
+            Log::info('Schedule generation completed successfully', $result['statistics']);
+
+            return redirect()
+                ->route('schedules.index')
+                ->with('success', $result['message']);
+
+        } catch (Exception $e) {
+            DB::rollBack();
+            Log::error('Schedule generation failed: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return redirect()
+                ->back()
+                ->with('error', 'Failed to generate schedule: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Generate optimized schedule using advanced algorithms
+     */
+    private function generateOptimizedSchedule(): array
+    {
+        $startTime = microtime(true);
+
+        // Initialize data structures
+        $scheduleMatrix = $this->initializeScheduleMatrix();
+        $teacherWorkload = $this->initializeTeacherWorkload();
+        $classSubjectDistribution = $this->initializeClassSubjectDistribution();
+
+        // Get all availabilities sorted by priority
+        $availabilities = $this->getAvailabilitiesSorted();
+
+        $statistics = [
+            'total_assignments' => 0,
+            'successful_assignments' => 0,
+            'consecutive_blocks' => 0,
+            'failed_assignments' => 0,
+            'optimization_score' => 0,
+        ];
+
+        // Process each availability with intelligent scheduling
+        foreach ($availabilities as $availability) {
+            $result = $this->processAvailability(
+                $availability,
+                $scheduleMatrix,
+                $teacherWorkload,
+                $classSubjectDistribution
+            );
+
+            $statistics['total_assignments'] += $result['total'];
+            $statistics['successful_assignments'] += $result['successful'];
+            $statistics['consecutive_blocks'] += $result['consecutive_blocks'];
+            $statistics['failed_assignments'] += $result['failed'];
+        }
+
+        // Calculate optimization score
+        $statistics['optimization_score'] = $this->calculateOptimizationScore($scheduleMatrix);
+        $statistics['generation_time'] = round(microtime(true) - $startTime, 3);
+
+        // Validate and optimize final schedule
+        $this->validateAndOptimizeSchedule($scheduleMatrix);
+
+        return [
+            'message' => $this->formatSuccessMessage($statistics),
+            'statistics' => $statistics,
+        ];
+    }
+
+    /**
+     * Initialize 3D schedule matrix [class][day][slot]
+     */
+    private function initializeScheduleMatrix(): array
+    {
+        $matrix = [];
+        foreach (self::CLASSES as $class) {
+            $matrix[$class] = [];
+            foreach (self::DAYS as $day) {
+                $matrix[$class][$day] = array_fill(1, self::TOTAL_SLOTS, null);
+            }
+        }
+        return $matrix;
+    }
+
+    /**
+     * Initialize teacher workload tracking
+     */
+    private function initializeTeacherWorkload(): array
+    {
+        $workload = [];
+        foreach (self::DAYS as $day) {
+            $workload[$day] = [];
+        }
+        return $workload;
+    }
+
+    /**
+     * Initialize class subject distribution tracking
+     */
+    private function initializeClassSubjectDistribution(): array
+    {
+        $distribution = [];
+        foreach (self::CLASSES as $class) {
+            $distribution[$class] = [];
+            foreach (self::DAYS as $day) {
+                $distribution[$class][$day] = [];
+            }
+        }
+        return $distribution;
+    }
+
+    /**
+     * Get availabilities sorted by scheduling priority
+     */
+    private function getAvailabilitiesSorted()
+    {
+        return AvailabilityModel::with(['teacher', 'subject'])
+            ->get()
+            ->sortBy([
+                ['subject.weekly_hours', 'desc'], // High-hour subjects first
+                ['class', 'asc'],
+                ['teacher.name', 'asc'],
+            ]);
+    }
+
+    /**
+     * Process individual availability with intelligent slot assignment
+     */
+    private function processAvailability(
+        $availability,
+        array &$scheduleMatrix,
+        array &$teacherWorkload,
+        array &$classSubjectDistribution
+    ): array {
+        $teacherId = $availability->teacher_id;
+        $subject = $availability->subject;
+        $class = $availability->class;
+        $remainingHours = $subject->weekly_hours;
+
+        $result = [
+            'total' => $remainingHours,
+            'successful' => 0,
+            'consecutive_blocks' => 0,
+            'failed' => 0,
+        ];
+
+        // Distribute hours across days with consecutive preference
+        $dailyDistribution = $this->calculateOptimalDailyDistribution($remainingHours);
+
+        foreach ($dailyDistribution as $targetDay => $hoursForDay) {
+            if ($hoursForDay <= 0)
+                continue;
+
+            $assignment = $this->findBestConsecutiveSlots(
+                $class,
+                $targetDay,
+                $hoursForDay,
+                $teacherId,
+                $scheduleMatrix,
+                $teacherWorkload,
+                $classSubjectDistribution
+            );
+
+            if ($assignment) {
+                $this->assignSlotsToSchedule(
+                    $assignment,
+                    $class,
+                    $subject->id,
+                    $teacherId,
+                    $scheduleMatrix,
+                    $teacherWorkload,
+                    $classSubjectDistribution
+                );
+
+                $result['successful'] += count($assignment['slots']);
+
+                if (count($assignment['slots']) > 1) {
+                    $result['consecutive_blocks']++;
+                }
+
+                $remainingHours -= count($assignment['slots']);
+            }
+        }
+
+        // Handle remaining hours if any
+        if ($remainingHours > 0) {
+            $fallbackResult = $this->assignRemainingHours(
+                $remainingHours,
+                $class,
+                $subject->id,
+                $teacherId,
+                $scheduleMatrix,
+                $teacherWorkload,
+                $classSubjectDistribution
+            );
+
+            $result['successful'] += $fallbackResult['successful'];
+            $result['consecutive_blocks'] += $fallbackResult['consecutive_blocks'];
+        }
+
+        $result['failed'] = $result['total'] - $result['successful'];
+
+        return $result;
+    }
+
+    /**
+     * Calculate optimal daily distribution of subject hours
+     */
+    private function calculateOptimalDailyDistribution(int $totalHours): array
+    {
+        $distribution = array_fill_keys(self::DAYS, 0);
+
+        if ($totalHours <= 0)
+            return $distribution;
+
+        // Strategy: Distribute evenly, prefer earlier days, avoid Friday for heavy subjects
+        $daysToUse = min($totalHours, 4); // Maximum 4 days per week
+        $baseHours = intval($totalHours / $daysToUse);
+        $extraHours = $totalHours % $daysToUse;
+
+        $preferredDays = [1, 2, 3, 4, 5]; // Monday to Friday preference
+
+        for ($i = 0; $i < $daysToUse; $i++) {
+            $day = $preferredDays[$i];
+            $distribution[$day] = $baseHours;
+
+            if ($extraHours > 0) {
+                $distribution[$day]++;
+                $extraHours--;
+            }
+        }
+
+        return $distribution;
+    }
+
+    /**
+     * Find best consecutive slots for a given day
+     */
+    private function findBestConsecutiveSlots(
+        string $class,
+        int $day,
+        int $requiredHours,
+        int $teacherId,
+        array $scheduleMatrix,
+        array $teacherWorkload,
+        array $classSubjectDistribution
+    ): ?array {
+        $bestAssignment = null;
+        $bestScore = -1;
+
+        // Define slot blocks (avoiding break slots)
+        $slotBlocks = [
+            [1, 2, 3],      // Morning block
+            [5, 6],         // Mid-morning block
+            [8, 9],         // Afternoon block
+        ];
+
+        foreach ($slotBlocks as $block) {
+            $assignment = $this->evaluateSlotBlock(
+                $block,
+                $class,
+                $day,
+                $requiredHours,
+                $teacherId,
+                $scheduleMatrix,
+                $teacherWorkload
+            );
+
+            if ($assignment && $assignment['score'] > $bestScore) {
+                $bestScore = $assignment['score'];
+                $bestAssignment = $assignment;
+            }
+        }
+
+        return $bestAssignment;
+    }
+
+    /**
+     * Evaluate a slot block for assignment
+     */
+    private function evaluateSlotBlock(
+        array $block,
+        string $class,
+        int $day,
+        int $requiredHours,
+        int $teacherId,
+        array $scheduleMatrix,
+        array $teacherWorkload
+    ): ?array {
+        $availableSlots = [];
+
+        // Check slot availability
+        foreach ($block as $slot) {
+            if (
+                $scheduleMatrix[$class][$day][$slot] === null &&
+                !isset($teacherWorkload[$day][$teacherId][$slot])
+            ) {
+                $availableSlots[] = $slot;
+            }
+        }
+
+        if (count($availableSlots) < $requiredHours) {
+            return null;
+        }
+
+        // Get consecutive slots
+        $consecutiveSlots = $this->getConsecutiveSlots($availableSlots, $requiredHours);
+
+        if (empty($consecutiveSlots)) {
+            return null;
+        }
+
+        // Calculate assignment score
+        $score = $this->calculateAssignmentScore(
+            $consecutiveSlots,
+            $day,
+            $class,
+            $teacherId,
+            $scheduleMatrix,
+            $teacherWorkload
+        );
+
+        return [
+            'day' => $day,
+            'slots' => $consecutiveSlots,
+            'score' => $score,
+        ];
+    }
+
+    /**
+     * Get consecutive slots from available slots
+     */
+    private function getConsecutiveSlots(array $availableSlots, int $requiredCount): array
+    {
+        if (empty($availableSlots) || $requiredCount <= 0) {
+            return [];
+        }
+
+        sort($availableSlots);
+
+        // Find longest consecutive sequence
+        $bestSequence = [];
+        $currentSequence = [$availableSlots[0]];
+
+        for ($i = 1; $i < count($availableSlots); $i++) {
+            if ($availableSlots[$i] === $availableSlots[$i - 1] + 1) {
+                $currentSequence[] = $availableSlots[$i];
+            } else {
+                if (count($currentSequence) >= $requiredCount && count($currentSequence) > count($bestSequence)) {
+                    $bestSequence = $currentSequence;
+                }
+                $currentSequence = [$availableSlots[$i]];
+            }
+        }
+
+        if (count($currentSequence) >= $requiredCount && count($currentSequence) > count($bestSequence)) {
+            $bestSequence = $currentSequence;
+        }
+
+        return array_slice($bestSequence, 0, $requiredCount);
+    }
+
+    /**
+     * Calculate assignment score based on multiple factors
+     */
+    private function calculateAssignmentScore(
+        array $slots,
+        int $day,
+        string $class,
+        int $teacherId,
+        array $scheduleMatrix,
+        array $teacherWorkload
+    ): int {
+        $score = 0;
+
+        // Consecutive bonus
+        if (count($slots) > 1) {
+            $score += self::SCORE_CONSECUTIVE * count($slots);
+        }
+
+        // Morning preference (earlier slots get higher score)
+        $avgSlot = array_sum($slots) / count($slots);
+        $score += self::SCORE_MORNING_PREFERENCE * (10 - $avgSlot);
+
+        // Teacher workload balance
+        $teacherDailyLoad = count($teacherWorkload[$day][$teacherId] ?? []);
+        $score += self::SCORE_TEACHER_WORKLOAD_BALANCE * (5 - $teacherDailyLoad);
+
+        // Daily distribution balance
+        $classDailyLoad = count(array_filter($scheduleMatrix[$class][$day]));
+        $score += self::SCORE_DAILY_DISTRIBUTION * (9 - $classDailyLoad);
+
+        return $score;
+    }
+
+    /**
+     * Assign slots to schedule matrix and update tracking
+     */
+    private function assignSlotsToSchedule(
+        array $assignment,
+        string $class,
+        int $subjectId,
+        int $teacherId,
+        array &$scheduleMatrix,
+        array &$teacherWorkload,
+        array &$classSubjectDistribution
+    ): void {
+        $day = $assignment['day'];
+
+        foreach ($assignment['slots'] as $slot) {
+            // Create schedule entry
+            ScheduleModel::create([
+                'class' => $class,
+                'day' => $day,
+                'slot' => $slot,
+                'subject_id' => $subjectId,
+                'teacher_id' => $teacherId,
+            ]);
+
+            // Update tracking matrices
+            $scheduleMatrix[$class][$day][$slot] = [
+                'subject_id' => $subjectId,
+                'teacher_id' => $teacherId,
+            ];
+
+            $teacherWorkload[$day][$teacherId][$slot] = true;
+
+            if (!isset($classSubjectDistribution[$class][$day][$subjectId])) {
+                $classSubjectDistribution[$class][$day][$subjectId] = 0;
+            }
+            $classSubjectDistribution[$class][$day][$subjectId]++;
+        }
+    }
+
+    /**
+     * Assign remaining hours using fallback strategy
+     */
+    private function assignRemainingHours(
+        int $remainingHours,
+        string $class,
+        int $subjectId,
+        int $teacherId,
+        array &$scheduleMatrix,
+        array &$teacherWorkload,
+        array &$classSubjectDistribution
+    ): array {
+        $result = ['successful' => 0, 'consecutive_blocks' => 0];
+
+        // Try to assign remaining hours to any available slot
+        foreach (self::DAYS as $day) {
+            if ($remainingHours <= 0)
+                break;
+
+            for ($slot = 1; $slot <= self::TOTAL_SLOTS; $slot++) {
+                if (
+                    $remainingHours > 0 &&
+                    $scheduleMatrix[$class][$day][$slot] === null &&
+                    !isset($teacherWorkload[$day][$teacherId][$slot]) &&
+                    !in_array($slot, self::BREAK_SLOTS)
+                ) {
+                    $this->assignSlotsToSchedule(
+                        ['day' => $day, 'slots' => [$slot]],
+                        $class,
+                        $subjectId,
+                        $teacherId,
+                        $scheduleMatrix,
+                        $teacherWorkload,
+                        $classSubjectDistribution
+                    );
+
+                    $result['successful']++;
+                    $remainingHours--;
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Calculate optimization score for the entire schedule
+     */
+    private function calculateOptimizationScore(array $scheduleMatrix): int
+    {
+        $score = 0;
+        $totalSlots = 0;
+        $consecutiveBlocks = 0;
+
+        foreach (self::CLASSES as $class) {
+            foreach (self::DAYS as $day) {
+                $daySchedule = array_filter($scheduleMatrix[$class][$day]);
+                $totalSlots += count($daySchedule);
+
+                // Count consecutive blocks
+                $consecutiveBlocks += $this->countConsecutiveBlocks($daySchedule);
+            }
+        }
+
+        if ($totalSlots > 0) {
+            $score = intval(($consecutiveBlocks / $totalSlots) * 100);
+        }
+
+        return $score;
+    }
+
+    /**
+     * Count consecutive blocks in a day schedule
+     */
+    private function countConsecutiveBlocks(array $daySchedule): int
+    {
+        if (empty($daySchedule))
+            return 0;
+
+        $slots = array_keys($daySchedule);
+        sort($slots);
+
+        $blocks = 0;
+        $currentBlockSize = 1;
+
+        for ($i = 1; $i < count($slots); $i++) {
+            if ($slots[$i] === $slots[$i - 1] + 1) {
+                $currentBlockSize++;
+            } else {
+                if ($currentBlockSize > 1) {
+                    $blocks++;
+                }
+                $currentBlockSize = 1;
+            }
+        }
+
+        if ($currentBlockSize > 1) {
+            $blocks++;
+        }
+
+        return $blocks;
+    }
+
+    /**
+     * Validate and optimize final schedule
+     */
+    private function validateAndOptimizeSchedule(array $scheduleMatrix): void
+    {
+        // Validate no teacher conflicts
+        $this->validateTeacherConflicts($scheduleMatrix);
+
+        // Validate daily limits
+        $this->validateDailyLimits($scheduleMatrix);
+
+        // Log optimization results
+        $this->logOptimizationResults($scheduleMatrix);
+    }
+
+    /**
+     * Validate teacher conflicts
+     */
+    private function validateTeacherConflicts(array $scheduleMatrix): void
+    {
+        $conflicts = [];
+
+        foreach (self::DAYS as $day) {
+            for ($slot = 1; $slot <= self::TOTAL_SLOTS; $slot++) {
+                $teachersInSlot = [];
+
+                foreach (self::CLASSES as $class) {
+                    $entry = $scheduleMatrix[$class][$day][$slot];
+                    if ($entry) {
+                        $teacherId = $entry['teacher_id'];
+                        if (isset($teachersInSlot[$teacherId])) {
+                            $conflicts[] = "Teacher {$teacherId} conflict on day {$day}, slot {$slot}";
+                        }
+                        $teachersInSlot[$teacherId] = true;
+                    }
+                }
+            }
+        }
+
+        if (!empty($conflicts)) {
+            Log::warning('Teacher conflicts detected:', $conflicts);
+        }
+    }
+
+    /**
+     * Validate daily limits
+     */
+    private function validateDailyLimits(array $scheduleMatrix): void
+    {
+        $violations = [];
+
+        foreach (self::CLASSES as $class) {
+            foreach (self::DAYS as $day) {
+                $subjectCounts = [];
+
+                foreach ($scheduleMatrix[$class][$day] as $slot => $entry) {
+                    if ($entry) {
+                        $subjectId = $entry['subject_id'];
+                        $subjectCounts[$subjectId] = ($subjectCounts[$subjectId] ?? 0) + 1;
+                    }
+                }
+
+                foreach ($subjectCounts as $subjectId => $count) {
+                    if ($count > self::MAX_DAILY_SUBJECT_HOURS) {
+                        $violations[] = "Subject {$subjectId} exceeds daily limit in class {$class}, day {$day}";
+                    }
+                }
+            }
+        }
+
+        if (!empty($violations)) {
+            Log::warning('Daily limit violations:', $violations);
+        }
+    }
+
+    /**
+     * Log optimization results
+     */
+    private function logOptimizationResults(array $scheduleMatrix): void
+    {
+        $stats = [
+            'total_assignments' => 0,
+            'consecutive_blocks' => 0,
+            'optimization_score' => $this->calculateOptimizationScore($scheduleMatrix),
+        ];
+
+        foreach (self::CLASSES as $class) {
+            foreach (self::DAYS as $day) {
+                $stats['total_assignments'] += count(array_filter($scheduleMatrix[$class][$day]));
+            }
+        }
+
+        Log::info('Schedule optimization completed', $stats);
+    }
+
+    /**
+     * Calculate schedule statistics
+     */
+    private function calculateScheduleStatistics($schedules): array
+    {
+        $stats = [
+            'total_classes' => count($schedules),
+            'total_sessions' => 0,
+            'consecutive_blocks' => 0,
+            'utilization_rate' => 0,
+        ];
+
+        foreach ($schedules as $class => $days) {
+            foreach ($days as $day => $sessions) {
+                $stats['total_sessions'] += count($sessions);
+                $stats['consecutive_blocks'] += $this->countConsecutiveBlocks($sessions->toArray());
+            }
+        }
+
+        $maxPossibleSessions = count(self::CLASSES) * count(self::DAYS) * self::TOTAL_SLOTS;
+        $stats['utilization_rate'] = $maxPossibleSessions > 0
+            ? round(($stats['total_sessions'] / $maxPossibleSessions) * 100, 2)
+            : 0;
+
+        return $stats;
+    }
+
+    /**
+     * Format success message
+     */
+    private function formatSuccessMessage(array $statistics): string
+    {
+        $successRate = $statistics['total_assignments'] > 0
+            ? round(($statistics['successful_assignments'] / $statistics['total_assignments']) * 100, 1)
+            : 0;
+
+        return "Schedule generated successfully! " .
+            "Success rate: {$successRate}% " .
+            "({$statistics['successful_assignments']}/{$statistics['total_assignments']} assignments), " .
+            "Consecutive blocks: {$statistics['consecutive_blocks']}, " .
+            "Optimization score: {$statistics['optimization_score']}%, " .
+            "Generation time: {$statistics['generation_time']}s";
+    }
+}

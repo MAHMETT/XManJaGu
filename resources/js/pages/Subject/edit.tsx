@@ -71,12 +71,12 @@ export default function EditSubject() {
                 >
                     <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                         <InputField
-                            label="Nama Lengkap"
+                            label="Nama Pelajaran"
                             id="name"
                             value={data.name}
                             onChange={(e) => setData('name', e.target.value)}
                             error={errors.name}
-                            placeholder="Masukkan nama lengkap Pelajaran"
+                            placeholder="Masukkan nama mata Pelajaran"
                             required
                         />
 
@@ -91,7 +91,7 @@ export default function EditSubject() {
                                 setData('weekly_hours', parsedValue);
                             }}
                             error={errors.weekly_hours}
-                            placeholder="Masukkan Nomor Induk Pegawai"
+                            placeholder="contoh: 1/2/3/4"
                             required
                         />
                     </div>
