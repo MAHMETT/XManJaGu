@@ -9,16 +9,10 @@ import { PencilIcon, PlusIcon, TrashIcon, UserGroupIcon } from '@heroicons/react
 import { Head, Link, usePage } from '@inertiajs/react';
 import { useState } from 'react';
 
-interface SubjectData {
-    id: string;
-    name: string;
-}
-
 interface TeacherData {
     id: string;
     name: string;
     nip: string;
-    subjects: SubjectData[];
     created_at: string;
     updated_at: string;
 }
@@ -27,7 +21,6 @@ interface CustomPageProps {
     data: TeacherData[];
     csrf_token?: string;
     [key: string]: unknown;
-    // flash?: { success?: string };
     flash?: { success?: string; error?: string };
     errors?: Record<string, string[]>;
 }

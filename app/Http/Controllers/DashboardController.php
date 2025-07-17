@@ -21,10 +21,11 @@ class DashboardController extends Controller
                 return $byClass->groupBy('day');
             });
 
-        $teachers = TeacherModel::all();
-        $subjects = SubjectModel::all();
-        $availabilitys = AvailabilityModel::all();
-        return Inertia::render('welcome', [
+        $teachers = TeacherModel::count();
+        $subjects = SubjectModel::count();
+        $availabilitys = AvailabilityModel::with('teachers', 'subjects')->count();
+
+        return Inertia::render('dashboard', [
             'schedules' => $schedules,
             'subjects' => $subjects,
             'teachers' => $teachers,

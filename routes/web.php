@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AvailabilityController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\LandingPageController;
 use App\Http\Controllers\ScheduleController;
 use App\Http\Controllers\SubjectController;
@@ -15,9 +16,7 @@ use Inertia\Inertia;
 Route::resource("/", LandingPageController::class)->only("index");
 
 Route::middleware(['auth', 'verified'])->group(function () {
-    Route::get('dashboard', function () {
-        return Inertia::render('dashboard');
-    })->name('dashboard');
+    Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     //teacher & subject
     Route::resource('teacher', TeacherController::class)->only('index', 'create', 'store', 'edit', 'update', 'destroy');

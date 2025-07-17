@@ -52,6 +52,15 @@ type TableViewType = 'horizontal' | 'vertical';
 // --- Komponen React ---
 
 export default function ScheduleIndex() {
+    return (
+        <AppLayout breadcrumbs={[{ title: 'Jadwal Pelajaran', href: route('schedules.index') }]}>
+            <Head title="Jadwal Pelajaran" />
+            <ScheduleTable />
+        </AppLayout>
+    );
+}
+
+export const ScheduleTable = ({ viewOnly = false }: { viewOnly?: boolean }) => {
     const { schedules, flash } = usePage<PageProps>().props;
     const classKeys = Object.keys(schedules);
     const [activeClass, setActiveClass] = useState<string>(classKeys[0] || '');
@@ -74,19 +83,22 @@ export default function ScheduleIndex() {
     };
 
     const handleGenerate = () => {
-        if (confirm('Apakah Anda yakin ingin generate ulang jadwal? Proses ini akan menimpa jadwal yang ada.')) {
-            router.post(route('schedules.generate'), undefined, {
-                preserveScroll: true,
-            });
+        if (viewOnly == false) {
+            return null;
+        } else {
+            if (confirm('Apakah Anda yakin ingin generate ulang jadwal? Proses ini akan menimpa jadwal yang ada.')) {
+                router.get(route('schedules.index'), undefined, {
+                    preserveScroll: true,
+                });
+            }
         }
     };
-
     // Helper untuk mencari jadwal berdasarkan slot
     const findItem = (list: ScheduleItem[], slot: number) => list.find((i) => i.slot === slot);
 
     // Komponen untuk tampilan horizontal (default)
     const renderHorizontalView = () => (
-        <Table className="min-w-full">
+        <Table className="scrollbar-none min-w-full">
             <TableHeader>
                 <TableRow>
                     <TableHead className="sticky left-0 z-10 w-[120px] bg-card">Hari</TableHead>
@@ -141,7 +153,7 @@ export default function ScheduleIndex() {
 
     // Komponen untuk tampilan vertikal
     const renderVerticalView = () => (
-        <Table className="min-w-full">
+        <Table className="scrollbar-none min-w-full">
             <TableHeader>
                 <TableRow>
                     <TableHead className="sticky left-0 z-10 w-[120px] bg-card">Jam</TableHead>
@@ -198,78 +210,79 @@ export default function ScheduleIndex() {
     );
 
     return (
-        <AppLayout breadcrumbs={[{ title: 'Jadwal Pelajaran', href: route('schedules.index') }]}>
-            <Head title="Jadwal Pelajaran" />
-            <div className="space-y-6 p-4 md:p-6">
-                {/* Flash Messages */}
-                {flash?.success && <div className="rounded-md bg-green-100 p-4 text-sm text-green-800">{flash.success}</div>}
-                {flash?.error && <div className="rounded-md bg-red-100 p-4 text-sm text-red-800">{flash.error}</div>}
+        <div className="space-y-6 p-4 md:p-6">
+            {/* Flash Messages */}
+            {flash?.success && <div className="rounded-md bg-green-100 p-4 text-sm text-green-800">{flash.success}</div>}
+            {flash?.error && <div className="rounded-md bg-red-100 p-4 text-sm text-red-800">{flash.error}</div>}
 
-                {/* Header: Pemilihan Kelas dan Tombol Aksi */}
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                    <div className="flex flex-wrap gap-2">
-                        {classKeys.map((cls) => (
-                            <Button
-                                key={cls}
-                                variant={activeClass === cls ? 'default' : 'outline'}
-                                onClick={() => setActiveClass(cls)}
-                                className="min-w-[80px]"
-                            >
-                                Kelas {cls}
-                            </Button>
-                        ))}
+            {/* Header: Pemilihan Kelas dan Tombol Aksi */}
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-wrap gap-2">
+                    {classKeys.map((cls) => (
+                        <Button
+                            key={cls}
+                            variant={activeClass === cls ? 'default' : 'outline'}
+                            onClick={() => setActiveClass(cls)}
+                            className="min-w-[80px]"
+                        >
+                            Kelas {cls}
+                        </Button>
+                    ))}
+                </div>
+
+                <div className="flex flex-wrap gap-2 max-sm:justify-between">
+                    <div className="flex items-center gap-1 rounded-md border p-1">
+                        <Button
+                            variant={tableView === 'horizontal' ? 'default' : 'ghost'}
+                            size="icon"
+                            onClick={() => saveTableViewPreference('horizontal')}
+                            title="Tampilan Horizontal"
+                        >
+                            <ListBulletIcon className="h-4 w-4" />
+                        </Button>
+                        <Button
+                            variant={tableView === 'vertical' ? 'default' : 'ghost'}
+                            size="icon"
+                            onClick={() => saveTableViewPreference('vertical')}
+                            title="Tampilan Vertikal"
+                        >
+                            <ViewColumnsIcon className="h-4 w-4" />
+                        </Button>
                     </div>
 
-                    <div className="flex flex-wrap gap-2 max-sm:justify-between">
-                        <div className="flex items-center gap-1 rounded-md border p-1">
-                            <Button
-                                variant={tableView === 'horizontal' ? 'default' : 'ghost'}
-                                size="icon"
-                                onClick={() => saveTableViewPreference('horizontal')}
-                                title="Tampilan Horizontal"
-                            >
-                                <ListBulletIcon className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant={tableView === 'vertical' ? 'default' : 'ghost'}
-                                size="icon"
-                                onClick={() => saveTableViewPreference('vertical')}
-                                title="Tampilan Vertikal"
-                            >
-                                <ViewColumnsIcon className="h-4 w-4" />
-                            </Button>
-                        </div>
-
+                    {viewOnly ? null : (
                         <Button variant="outline" onClick={handleGenerate}>
                             <ArrowPathIcon className="mr-2 h-4 w-4" /> Generate Ulang
                         </Button>
-                    </div>
+                    )}
                 </div>
+            </div>
 
-                {/* Konten Jadwal */}
-                {!activeClass || !schedules[activeClass] || Object.keys(schedules[activeClass]).length === 0 ? (
-                    <EmptyState
-                        title="Jadwal Belum Tersedia"
-                        description="Silakan pilih kelas atau generate jadwal jika belum ada."
-                        action={
+            {/* Konten Jadwal */}
+            {!activeClass || !schedules[activeClass] || Object.keys(schedules[activeClass]).length === 0 ? (
+                <EmptyState
+                    title="Jadwal Belum Tersedia"
+                    description="Silakan pilih kelas atau generate jadwal jika belum ada."
+                    action={
+                        viewOnly ? null : (
                             <Button onClick={handleGenerate}>
                                 <ArrowPathIcon className="mr-2 h-4 w-4" /> Generate Jadwal
                             </Button>
-                        }
-                    />
-                ) : (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center justify-between">
-                                <span>Jadwal Pelajaran Kelas {activeClass}</span>
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="custom-scrollbar overflow-x-auto">
-                            {tableView === 'horizontal' ? renderHorizontalView() : renderVerticalView()}
-                        </CardContent>
-                    </Card>
-                )}
-            </div>
-        </AppLayout>
+                        )
+                    }
+                />
+            ) : (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center justify-between">
+                            <span>Jadwal Pelajaran Kelas {activeClass}</span>
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="custom-scrollbar overflow-x-auto">
+                        {tableView === 'horizontal' ? renderHorizontalView() : renderVerticalView()}
+                    </CardContent>
+                </Card>
+            )}
+        </div>
     );
-}
+};
